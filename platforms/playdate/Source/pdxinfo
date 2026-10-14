@@ -1,0 +1,6 @@
+name=Mazethingie
+author=Willems Davy aka Joyrider3774
+description=Generate Mazes and solve them
+bundleID=com.joyrider3774.mazethingie.embedded
+version=1.0
+buildNumber=1

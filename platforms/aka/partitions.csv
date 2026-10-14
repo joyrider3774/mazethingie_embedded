@@ -1,0 +1,11 @@
+# Partition table pour Wargame AKA (ESP32-S3, 8 Mo)
+# NOTE : la partition "loader" (OTA_1) doit correspondre au launcher/menu deja
+# flashe sur la console (cf. mecanisme de retour au menu fourni). Si votre
+# launcher utilise une autre table de partitions, reutilisez-la a la place de
+# celle-ci plutot que de la regenerer, sous peine d'effacer le loader existant.
+
+nvs,      data, nvs,     0x9000,   0x6000
+otadata,  data, ota,     0xF000,   0x2000
+factory,  app,  factory, 0x20000,  0x300000
+loader,   app,  ota_1,   0x320000, 0x80000
+storage,  data, fat,     0x3A0000, 0x460000

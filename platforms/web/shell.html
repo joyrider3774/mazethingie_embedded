@@ -1,0 +1,128 @@
+<!doctype html>
+<!--
+The page the browser build is wrapped in, made for an itch.io HTML project: the game fills whatever
+the iframe gives it, keeps its square shape, and stays blocky instead of being smeared. Emscripten
+puts the game's own script where {{{ SCRIPT }}} is.
+
+On itch.io set the project to "HTML", upload the zip this build makes, tick "This file will be
+played in the browser", and set the viewport to a square (800 x 800 works well) with fullscreen
+allowed. The page itself needs no particular size, it fits whatever it is given.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Mazethingie</title>
+<style>
+	html, body {
+		margin: 0;
+		padding: 0;
+		width: 100%;
+		height: 100%;
+		overflow: hidden;
+		background: #000;
+		/* a tap does not select the page or bring up the magnifier */
+		-webkit-user-select: none;
+		user-select: none;
+		-webkit-tap-highlight-color: transparent;
+		touch-action: none;
+	}
+	#frame {
+		width: 100%;
+		height: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	/* as big as fits while staying square, and every pixel of the game stays a square block */
+	#canvas {
+		width: min(100vw, 100vh);
+		height: min(100vw, 100vh);
+		display: block;
+		background: #000;
+		outline: none;
+		border: 0;
+		image-rendering: pixelated;
+		image-rendering: crisp-edges;
+		-ms-interpolation-mode: nearest-neighbor;
+	}
+	#overlay {
+		position: fixed;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.6em;
+		background: #000;
+		color: #ddd;
+		font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+		text-align: center;
+		cursor: pointer;
+	}
+	#overlay.gone { display: none; }
+	#keys { color: #888; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="frame"><canvas id="canvas" tabindex="-1"></canvas></div>
+
+<!--
+A browser will not play a sound until the page has been clicked or tapped, so the game starts behind
+this and the first click both takes it away and lets the sound through.
+-->
+<div id="overlay">
+	<div id="status">loading&hellip;</div>
+	<div id="keys">arrows move &middot; X and C &middot; S and D</div>
+</div>
+
+<script type="text/javascript">
+	var canvas = document.getElementById('canvas');
+	var overlay = document.getElementById('overlay');
+	var statusText = document.getElementById('status');
+	var started = false;
+
+	var Module = {
+		canvas: canvas,
+		// what the browser prints goes to the console, the canvas is the game's
+		print: function (text) { console.log(text); },
+		printErr: function (text) { console.error(text); },
+		setStatus: function (text) {
+			if (started) return;
+			statusText.textContent = text || 'click or tap to play';
+		},
+		onRuntimeInitialized: function () {
+			statusText.textContent = 'click or tap to play';
+		}
+	};
+
+	// The arrow keys scroll a page and space presses whatever has focus, neither of which should
+	// happen while the game has them
+	window.addEventListener('keydown', function (e) {
+		if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab'].indexOf(e.key) >= 0)
+			e.preventDefault();
+	}, { passive: false });
+
+	// the first click starts the sound and takes the overlay away, every later one only gives the
+	// canvas the keyboard again
+	function start() {
+		canvas.focus();
+		if (Module.SDL2 && Module.SDL2.audioContext && Module.SDL2.audioContext.state === 'suspended')
+			Module.SDL2.audioContext.resume();
+		if (started) return;
+		started = true;
+		overlay.classList.add('gone');
+	}
+	overlay.addEventListener('click', start);
+	overlay.addEventListener('touchstart', start, { passive: true });
+	canvas.addEventListener('click', start);
+	canvas.addEventListener('touchstart', start, { passive: true });
+	// clicking the page around the game should not take the keyboard away from it
+	window.addEventListener('mousedown', function () { canvas.focus(); });
+</script>
+
+{{{ SCRIPT }}}
+
+</body>
+</html>

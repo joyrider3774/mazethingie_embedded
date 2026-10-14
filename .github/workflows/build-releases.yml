@@ -1,0 +1,319 @@
+# Builds every device's release file on a Linux runner and uploads them all as one artifact.
+#
+# The toolchains are pinned to the versions the game is developed against, so a build a year from now
+# is the same build. The Windows exe, the libretro dll and the Playdate simulator's pdex.dll are cross
+# compiled with mingw-w64 (tools/mingw-w64.cmake), so the Linux runner still produces the same files
+# as a Windows machine does.
+#
+# The PSP is the reason this is a Linux job: pspdev has no Windows toolchain at all.
+
+name: Build releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  # the Arduino side, the versions this game is built with
+  ARDUINO_CLI_VERSION: 1.5.1
+  CORE_ESP8266: 3.1.2
+  CORE_GAMEBUINO: 1.2.2
+  CORE_ADAFRUIT_SAMD: 1.7.16
+  CORE_RP2040: 5.5.0
+  # Kevin Bates' CH32X035 handheld. Its package is only published for the Arduino IDE 2 on a desktop,
+  # but it is an ordinary board manager index, so arduino-cli installs it here like any other. It
+  # brings its own riscv-none-embed-gcc, including an x86_64-linux-gnu build
+  CORE_CHGAME: 0.3.0
+  # the Gamebuino's core uses Arduino's own CMSIS-Atmel tool package for sam.h, which comes with the
+  # arduino:samd core: without it the build stops at "sam.h: No such file or directory"
+  CORE_ARDUINO_SAMD: 1.8.14
+  # the Gamebuino AKA side: the ESP-IDF version the AKA library's own projects use
+  IDF_VERSION: v5.5.1
+  # LovyanGFX and TFT_eSPI are what the ESPboy build needs. TFT_eSPI 2.4.76, which the development
+  # machine has, was never released to the library index (it is a snapshot between 2.4.72 and 2.4.79):
+  # the ESPboy draws through LovyanGFX and only includes TFT_eSPI's header, so 2.4.72 does as well
+  LIB_LOVYANGFX: 1.1.9
+  LIB_TFT_ESPI: 2.4.72
+  LIB_NEOPIXEL: 1.15.5
+  LIB_SPIFLASH: 5.1.1
+  LIB_GAMEBUINO: 1.3.3
+  # the PyBadge and the PyGamer draw through Adafruit's GFX and ST7735 libraries
+  LIB_GFX: 1.12.6
+  LIB_ST7735: 1.5.15
+  LIB_BUSIO: 1.17.4
+  # the other toolchains
+  SDL2_VERSION: 2.32.10
+  PSPDEV_RELEASE: v20260901
+  VITASDK_RELEASE: softfp-linux-v2.228
+  VITASDK_ASSET: vitasdk-x86_64-linux-gnu-2022-08-14_14-50-39.tar.bz2
+  # PSn00bSDK and the GCC it needs, both from its own release
+  PSN00BSDK_VERSION: 0.24
+  PSN00BSDK_GCC: gcc-mipsel-none-elf-12.3.0-linux.zip
+  # the Nintendo 64: libdragon publishes the mips64-elf toolchain it builds with, libdragon itself
+  # has no releases of its own and is built here from the commit it is pinned to
+  # DJGPP and the DPMI host it needs for the MS-DOS build
+  DJGPP_RELEASE: v3.4
+  DJGPP_ASSET: djgpp-linux64-gcc1220.tar.bz2
+  CWSDPMI_URL: http://www.delorie.com/pub/djgpp/current/v2misc/csdpmi7b.zip
+  # Emscripten for the browser build, pinned the same way as the rest
+  EMSDK_VERSION: 6.0.4
+  LIBDRAGON_TOOLCHAIN: gcc-toolchain-mips64-x86_64.deb
+  LIBDRAGON_COMMIT: e356bf3f56f7afbf7e5246329562f145965cfdfc
+  # devkitARM, libgba, libnds and libctru come from a repack of devkitPro's gba-dev, nds-dev and
+  # 3ds-dev packages on joyrider3774/sdks: pkg.devkitpro.org answers runners with 403 too often
+  DEVKITPRO_RELEASE: v1.0
+  DEVKITPRO_ASSET: devkitpro-gba-nds-3ds-dev-linux-x86_64-r68.tar.xz
+  DEVKITPRO_SHA256: 29506cb5ed1a57b89bc8589d3747caf94957128605afe1c9617f029d0cef0f69
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the game
+        uses: actions/checkout@v4
+
+      - name: Install the packages the builds need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential python3 \
+            mingw-w64 gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib
+
+      # ------------------------------------------------------------------ toolchains
+      # not cached: restoring a cache left the builds without parts of what was installed,
+      # everything is downloaded fresh on every run instead
+      - name: Download the toolchains
+        run: |
+          set -e
+          mkdir -p ~/toolchains/bin
+          cd ~/toolchains
+
+          echo "::group::Playdate SDK"
+          curl -sL -o playdate.tar.gz https://download.panic.com/playdate_sdk/Linux/PlaydateSDK-latest.tar.gz
+          tar -xzf playdate.tar.gz && rm playdate.tar.gz
+          mv PlaydateSDK-* PlaydateSDK
+          echo "::endgroup::"
+
+          echo "::group::pspdev"
+          curl -sL -o pspdev.tar.gz \
+            https://github.com/pspdev/pspdev/releases/download/${PSPDEV_RELEASE}/pspdev-ubuntu-latest-x86_64.tar.gz
+          mkdir -p pspdev && tar -xzf pspdev.tar.gz -C pspdev --strip-components=1 && rm pspdev.tar.gz
+          echo "::endgroup::"
+
+          echo "::group::VitaSDK"
+          curl -sL -o vitasdk.tar.bz2 \
+            https://github.com/vitasdk/buildscripts/releases/download/${VITASDK_RELEASE}/${VITASDK_ASSET}
+          mkdir -p vitasdk && tar -xjf vitasdk.tar.bz2 -C vitasdk --strip-components=1 && rm vitasdk.tar.bz2
+          echo "::endgroup::"
+
+          echo "::group::SDL2 for mingw"
+          curl -sL -o sdl2.tar.gz \
+            https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-devel-${SDL2_VERSION}-mingw.tar.gz
+          tar -xzf sdl2.tar.gz && rm sdl2.tar.gz
+          mv SDL2-${SDL2_VERSION} SDL2
+          echo "::endgroup::"
+
+          echo "::group::libretro-common"
+          git clone --depth 1 https://github.com/libretro/libretro-common.git libretro-common
+          echo "::endgroup::"
+
+          echo "::group::PSn00bSDK"
+          curl -sL -o psn00bsdk.zip \
+            https://github.com/Lameguy64/PSn00bSDK/releases/download/v${PSN00BSDK_VERSION}/PSn00bSDK-${PSN00BSDK_VERSION}-Linux.zip
+          curl -sL -o psn00bsdk-gcc.zip \
+            https://github.com/Lameguy64/PSn00bSDK/releases/download/v${PSN00BSDK_VERSION}/${PSN00BSDK_GCC}
+          # the SDK and the toolchain share one folder, which is what the SDK expects
+          mkdir -p psn00bsdk
+          unzip -q psn00bsdk-gcc.zip -d psn00bsdk && rm psn00bsdk-gcc.zip
+          unzip -q psn00bsdk.zip -d psn00bsdk-tmp && rm psn00bsdk.zip
+          cp -r psn00bsdk-tmp/*/. psn00bsdk/ && rm -rf psn00bsdk-tmp
+          chmod +x psn00bsdk/bin/*
+          test -f psn00bsdk/lib/libpsn00b/cmake/sdk.cmake
+          echo "::endgroup::"
+
+          echo "::group::libdragon for the Nintendo 64"
+          # the mips64-elf toolchain out of libdragon's own release, whatever prefix the .deb uses
+          curl -sSfL --retry 5 -o libdragon-gcc.deb \
+            https://github.com/DragonMinded/libdragon/releases/download/toolchain-continuous-prerelease/${LIBDRAGON_TOOLCHAIN}
+          dpkg-deb -x libdragon-gcc.deb libdragon-deb
+          gcc_dir=$(dirname "$(dirname "$(find libdragon-deb -type f -name mips64-elf-gcc | head -1)")")
+          mkdir -p n64 && cp -a "$gcc_dir"/. n64/
+          rm -rf libdragon-deb libdragon-gcc.deb
+          # libdragon itself: its library, its headers and the tools that build the ROM
+          git init -q libdragon-src
+          git -C libdragon-src remote add origin https://github.com/DragonMinded/libdragon.git
+          git -C libdragon-src fetch -q --depth 1 origin ${LIBDRAGON_COMMIT}
+          git -C libdragon-src checkout -q FETCH_HEAD
+          export N64_INST="$HOME/toolchains/n64"
+          export PATH="$N64_INST/bin:$PATH"
+          make -C libdragon-src -j$(nproc) install
+          # Only the four tools the ROM is built with, not the ones for assets nobody here has.
+          # C_CXX_FLAGS on the command line replaces the whole variable instead of adding to it, so
+          # what the tools makefile puts in it is repeated here, with -Werror left off the end
+          make -C libdragon-src/tools -j$(nproc) \
+            n64tool-install n64sym-install n64elfcompress-install ed64romconfig-install \
+            INSTALLDIR="$N64_INST" \
+            C_CXX_FLAGS="-O2 -pthread -Wall -I../include -MMD -Wno-unused-result -Wno-sign-compare -Wno-error"
+          rm -rf libdragon-src
+          test -f n64/mips64-elf/lib/libdragon.a
+          for tool in n64tool n64sym n64elfcompress ed64romconfig; do test -x "n64/bin/$tool"; done
+          echo "::endgroup::"
+
+          echo "::group::DJGPP for MS-DOS"
+          curl -sSfL --retry 5 -o djgpp.tar.bz2 \
+            https://github.com/andrewwutw/build-djgpp/releases/download/${DJGPP_RELEASE}/${DJGPP_ASSET}
+          mkdir -p dos_dev
+          tar -xjf djgpp.tar.bz2 -C dos_dev && rm djgpp.tar.bz2
+          # CWSDPMI is the DPMI host that is built into the program, so it needs nothing beside it
+          curl -sSfL --retry 5 -o csdpmi.zip "${CWSDPMI_URL}"
+          unzip -q -o csdpmi.zip -d dos_dev/csdpmi && rm csdpmi.zip
+          test -x dos_dev/djgpp/bin/i586-pc-msdosdjgpp-g++
+          test -f dos_dev/csdpmi/bin/CWSDSTUB.EXE
+          echo "::endgroup::"
+
+          echo "::group::Emscripten"
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git emsdk
+          ./emsdk/emsdk install ${EMSDK_VERSION}
+          ./emsdk/emsdk activate ${EMSDK_VERSION}
+          test -x emsdk/upstream/emscripten/emcc
+          echo "::endgroup::"
+
+          echo "::group::arduino-cli"
+          curl -sL -o arduino-cli.tar.gz \
+            https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz
+          tar -xzf arduino-cli.tar.gz -C bin arduino-cli && rm arduino-cli.tar.gz
+          echo "::endgroup::"
+
+      - name: Install devkitARM, libgba, libnds and libctru for the GBA, the DS and the 3DS
+        run: |
+          set -e
+          # the archive holds a devkitpro folder (devkitARM, libgba, tools, ...) that goes in /opt,
+          # PACKAGES.txt in it lists the devkitPro package versions it was made from
+          curl -sSfL --retry 5 -o devkitpro.tar.xz https://github.com/joyrider3774/sdks/releases/download/${DEVKITPRO_RELEASE}/${DEVKITPRO_ASSET}
+          echo "${DEVKITPRO_SHA256}  devkitpro.tar.xz" | sha256sum -c -
+          sudo tar -xJf devkitpro.tar.xz -C /opt && rm devkitpro.tar.xz
+          test -x /opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc
+          test -x /opt/devkitpro/tools/bin/gbafix
+          test -f /opt/devkitpro/libgba/include/gba.h
+          test -x /opt/devkitpro/tools/bin/ndstool
+          test -f /opt/devkitpro/libnds/include/nds.h
+          test -f /opt/devkitpro/calico/share/ds9.specs
+          test -x /opt/devkitpro/tools/bin/3dsxtool
+          test -f /opt/devkitpro/libctru/include/3ds.h
+
+      # ------------------------------------------------------------------ the Arduino boards
+      # not cached either: the cache only held ~/.arduino15, the libraries go in ~/Arduino/libraries,
+      # so a restored cache skipped installing them and the builds could not find LovyanGFX,
+      # SdFat or Adafruit_GFX
+      - name: Install the board packages and the libraries
+        run: |
+          set -e
+          export PATH="$HOME/toolchains/bin:$PATH"
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://arduino.esp8266.com/stable/package_esp8266com_index.json \
+            https://gamebuino.com/sdk/package_gamebuino_index.json \
+            https://adafruit.github.io/arduino-board-index/package_adafruit_index.json \
+            https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json \
+            https://github.com/bateske/CHGame/releases/latest/download/package_chgame_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp8266:esp8266@${CORE_ESP8266}
+          arduino-cli core install gamebuino:samd@${CORE_GAMEBUINO}
+          arduino-cli core install adafruit:samd@${CORE_ADAFRUIT_SAMD}
+          arduino-cli core install rp2040:rp2040@${CORE_RP2040}
+          arduino-cli core install arduino:samd@${CORE_ARDUINO_SAMD}
+          arduino-cli core install CHGame:ch32v@${CORE_CHGAME}
+          # The CHGame core's ch32yyxx.h asks for "core_riscv_cH32yyxx.h" where the file it means is
+          # core_riscv_ch32yyxx.h. On Windows, where that package is put together, the case makes no
+          # difference; here it does and the build stops at "No such file or directory". A link under
+          # the name it asks for leaves the package's own files as they are. Guarded both ways so a
+          # version that has this fixed needs no change here
+          CH32LIB="$HOME/.arduino15/packages/CHGame/hardware/ch32v/${CORE_CHGAME}/cores/arduino/ch32/lib"
+          if [ -f "$CH32LIB/core_riscv_ch32yyxx.h" ] && [ ! -e "$CH32LIB/core_riscv_cH32yyxx.h" ]; then
+            ln -s core_riscv_ch32yyxx.h "$CH32LIB/core_riscv_cH32yyxx.h"
+            echo "linked core_riscv_cH32yyxx.h, see the note above"
+          fi
+          # The game takes its buttons and sound from the board's CHGame library. Board package
+          # 0.3.0 links its libraries' objects whole, so CHGfx's DMA interrupt handler keeps its 8 KB
+          # framebuffer in the game even though it never draws with it, which leaves the game too
+          # little RAM. dot_a_linkage=true links them from archives instead (bateske/CHGame pull
+          # request 20); a package that already has it is left alone
+          CHLIBS="$HOME/.arduino15/packages/CHGame/hardware/ch32v/${CORE_CHGAME}/libraries"
+          for lib in CHGfx CHGame CHSd; do
+            props="$CHLIBS/$lib/library.properties"
+            if [ -f "$props" ] && ! grep -q "^dot_a_linkage=true" "$props"; then
+              printf '\ndot_a_linkage=true\n' >> "$props"
+              echo "dot_a_linkage=true added to $lib, see the note above"
+            fi
+          done
+          # the ESPboy draws with LovyanGFX, the PyBadge and PyGamer use the Adafruit libraries and
+          # the Gamebuino META its own. The RP2040 and RP2350 devices need no library at all
+          arduino-cli lib install "LovyanGFX@${LIB_LOVYANGFX}"
+          arduino-cli lib install "TFT_eSPI@${LIB_TFT_ESPI}"
+          arduino-cli lib install "Adafruit NeoPixel@${LIB_NEOPIXEL}"
+          arduino-cli lib install "Adafruit SPIFlash@${LIB_SPIFLASH}"
+          arduino-cli lib install "Gamebuino META@${LIB_GAMEBUINO}"
+          arduino-cli lib install "Adafruit BusIO@${LIB_BUSIO}"
+          arduino-cli lib install "Adafruit GFX Library@${LIB_GFX}"
+          arduino-cli lib install "Adafruit ST7735 and ST7789 Library@${LIB_ST7735}"
+
+      # ------------------------------------------------------------------ the builds
+      # ESP-IDF and the Gamebuino AKA library, for the AKA build. install.sh is slow, so only
+      # the esp32s3 toolchain is asked for
+      - name: Install ESP-IDF and the Gamebuino AKA library
+        run: |
+          set -e
+          git clone -b ${IDF_VERSION} --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/espressif/esp-idf.git "$HOME/toolchains/esp-idf"
+          export IDF_TOOLS_PATH="$HOME/toolchains/espressif"
+          export IDF_PATH="$HOME/toolchains/esp-idf"
+          "$IDF_PATH/install.sh" esp32s3
+          # idf_tools.py export insists on every tool of the install and this one is not in
+          # the esp32s3 set: without it the build stops at "has no installed versions"
+          "$IDF_TOOLS_PATH"/python_env/*/bin/python "$IDF_PATH/tools/idf_tools.py" \
+            install riscv32-esp-elf-gdb
+          git clone --depth 1 https://github.com/jmp42/Gamebuino_AKA_lib.git \
+            "$HOME/toolchains/Gamebuino_AKA_lib"
+
+      - name: Build every device
+        run: |
+          # emcc finds its own config and node through this, the browser build needs both
+          source "$HOME/toolchains/emsdk/emsdk_env.sh"
+          python3 tools/build_releases.py \
+            --arduino-cli "$HOME/toolchains/bin/arduino-cli" \
+            --msys2 "" \
+            --playdate-sdk "$HOME/toolchains/PlaydateSDK" \
+            --playdate-arm /usr/bin \
+            --devkitpro /opt/devkitpro \
+            --psn00bsdk "$HOME/toolchains/psn00bsdk" \
+            --n64 "$HOME/toolchains/n64" \
+            --emsdk "$HOME/toolchains/emsdk" \
+            --dosdev "$HOME/toolchains/dos_dev" \
+            --pspdev "$HOME/toolchains/pspdev" \
+            --vitasdk "$HOME/toolchains/vitasdk" \
+            --libretro-common "$HOME/toolchains/libretro-common" \
+            --idf "$HOME/toolchains/esp-idf" \
+            --idf-tools "$HOME/toolchains/espressif" \
+            --aka-lib "$HOME/toolchains/Gamebuino_AKA_lib" \
+            --lovyangfx "$HOME/Arduino/libraries/LovyanGFX" \
+            --cross-windows \
+            --sdl2-mingw "$HOME/toolchains/SDL2/x86_64-w64-mingw32"
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: mazethingie_releases
+          path: releases/
+          if-no-files-found: error
+
+      - name: Upload the build logs when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: /tmp/*_releases/*.log
+          if-no-files-found: ignore

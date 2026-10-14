@@ -1,0 +1,22 @@
+# editors
+/.vscode
+/.vs
+
+# what the device builds leave behind. Every platform builds inside its own folder under
+# platforms/ and they do not agree on a name - build, build_windows, build-windows,
+# build_aka_sdl - so one pattern covers the lot
+/platforms/*/build*
+/platforms/playdate/Source/pdex.*
+/platforms/playdate/*.pdx
+# the Arduino IDE's, at the root
+/build
+/output.map
+/output-orig.map
+
+# the built files do not belong in the repository, they go to the GitHub release
+/releases/
+
+# what Python leaves next to the scripts in tools/
+__pycache__/
+*.pyc
+/tools/output.map
