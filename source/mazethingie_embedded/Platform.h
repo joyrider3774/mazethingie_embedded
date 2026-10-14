@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "defines.h"
+#include "Defines.h"
 
 // ===========================================================================
 // Settings
