@@ -1,0 +1,11 @@
+{
+  "id": "mazethingie",
+  "title": "MAZETHINGIE",
+  "author": "Willems Davy",
+  "version": "1.0",
+  "description": "A maze generator and player",
+  "genre": "Puzzle",
+  "license": "MIT",
+  "url": "https://github.com/joyrider3774/mazethingie_embedded",
+  "sourceUrl": "https://github.com/joyrider3774/mazethingie_embedded"
+}

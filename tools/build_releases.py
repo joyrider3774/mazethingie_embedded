@@ -74,6 +74,9 @@ Usage:
                   C:/n64_dev)
   --emsdk DIR     the Emscripten SDK for the browser build (default EMSDK, or C:/github/emsdk)
   --dosdev DIR    DJGPP and CWSDPMI for the MS-DOS build (default DOSDEV, or C:/dos_dev)
+  --chgame DIR    the CHGame source repository (default CHGAME_DIR, or C:/github/CHGame),
+                  whose tools write the CHGame .chgame cart. Without it the cart is the
+                  one thing left out and everything else is built as usual
 """
 import argparse
 import glob
@@ -157,6 +160,9 @@ DEVICES = {
         "folder": GAME + "_embedded",
     },
     "CHGame": {
+        # a .chgame cart to share it with, see make_cart. Needs CHGame's own tools, which
+        # the board package does not carry: without them the rest of the build is unaffected
+        "cart": True,
         # Kevin Bates' CH32X035 handheld, board package github.com/bateske/CHGame (0.3.0 on). It is
         # only published for the Arduino IDE 2, whose packages the IDE 1.8 folder does not hold, so
         # this one is built with the arduino-cli that IDE 2 ships and the rest with the IDE 1.8
@@ -532,6 +538,68 @@ def cmake_define_args(defines):
         args.append("-DEXTRA_DEFINES="
                     + ";".join("%s=%s" % (n, v) for n, v in sorted(extra.items())))
     return args
+
+
+def make_cart(built, chgame_dir, log):
+    """The .chgame distribution cart of the CHGame build, by CHGame's own chcart.
+
+    A .chgame (CHGame's spec/chgame.md) is how a game is shared: a ZIP holding the
+    program, what it is called and who wrote it, its licence, a 128x128 picture for the
+    visual menu and the files it reads from the card. It is not the .chg the board
+    package already writes beside every build: that one is the runtime form the SD menu
+    installs, one program and no card files.
+
+    The tools that write it live in CHGame's source repository and not in the board
+    package, which brings only chgame-upload, the compiler and wchisp. So this is the
+    one output that can be missing: without that clone the function says why and the
+    build carries on, the same way a device whose toolchain is absent is skipped.
+
+    Returns (path, None) or (None, reason).
+    """
+    tool = os.path.join(chgame_dir, "tools", "chgame.py")
+    meta = os.path.join(HERE, "chgame.json")
+    if not os.path.isfile(tool):
+        return None, "no CHGame clone at %s, see --chgame" % chgame_dir
+    if not os.path.isfile(meta):
+        return None, "no %s" % os.path.relpath(meta, ROOT)
+    with open(meta, encoding="utf-8") as f:
+        game_id = json.load(f)["id"]
+    #the picture every game keeps for its README, 256x256, which chcart scales to the
+    #128x128 the menu wants, two pixels to one
+    art = os.path.join(ROOT, "metadata", "screenshots", "title.png")
+    out = os.path.join(RELEASES, file_name("CHGame", "", "chgame"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        #chcart takes a game from a sketch folder: its chgame.json, the built image
+        #under build/release, and the card files under sdcard/
+        stage = os.path.join(tmp, GAME)
+        os.makedirs(os.path.join(stage, "build", "release"))
+        shutil.copyfile(meta, os.path.join(stage, "chgame.json"))
+        shutil.copyfile(built + ".bin", os.path.join(stage, "build", "release", GAME + ".ino.bin"))
+        #the game reads its art and levels off the card, so a cart without the card file
+        #would install a game that cannot start
+        cards = glob.glob(os.path.join(RELEASES, "*.DAT"))
+        if cards:
+            os.makedirs(os.path.join(stage, "sdcard"))
+            for card in cards:
+                shutil.copyfile(card, os.path.join(stage, "sdcard", os.path.basename(card)))
+        for extra in ("LICENSE", "README.md"):
+            if os.path.isfile(os.path.join(ROOT, extra)):
+                shutil.copyfile(os.path.join(ROOT, extra), os.path.join(stage, extra))
+
+        steps = [["cart", "new", out, stage, "--no-build"]]
+        if os.path.isfile(art):
+            steps.append(["cart", "picture", out, art, "--game", game_id])
+        #every rule of the format, so a cart that would be refused never ships
+        steps.append(["cart", "verify", out])
+        with open(log, "a") as f:
+            for step in steps:
+                f.write("\n$ chgame %s\n" % " ".join(step))
+                f.flush()
+                if subprocess.run([sys.executable, tool] + step,
+                                  stdout=f, stderr=subprocess.STDOUT).returncode != 0:
+                    return None, "chgame %s failed, see %s" % (step[1], os.path.basename(log))
+    return out, None
 
 
 def build_windows(defines, build_dir, msys2, cross, lovyangfx, log):
@@ -1011,6 +1079,10 @@ def main():
     parser.add_argument("--n64", default=os.environ.get("N64_INST", "C:/n64_dev"))
     parser.add_argument("--emsdk", default=os.environ.get("EMSDK", "C:/github/emsdk"))
     parser.add_argument("--dosdev", default=os.environ.get("DOSDEV", "C:/dos_dev"))
+    parser.add_argument("--chgame", default=os.environ.get("CHGAME_DIR", "C:/github/CHGame"),
+                        help="the CHGame source repository, for the .chgame cart its tools write "
+                             "(default CHGAME_DIR, or C:/github/CHGame). Without it every other "
+                             "output is still built")
     parser.add_argument("--pspdev", default=os.environ.get("PSPDEV_DIR", "C:/psp_dev"))
     parser.add_argument("--vitasdk", default=os.environ.get("VITASDK", "C:/psvita_dev"))
     parser.add_argument("--libretro-common", default=os.environ.get("LIBRETRO_COMMON_DIR", "C:/github/libretro-common"))
@@ -1149,6 +1221,16 @@ def main():
             else:
                 shutil.copyfile(built + "." + ext, target)
             written.append("%s (%d KB)" % (os.path.basename(target), (os.path.getsize(target) + 1023) // 1024))
+
+        #the shareable cart, for a device that has one. It is the only output allowed to
+        #go missing, see make_cart
+        if DEVICES[device].get("cart"):
+            cart, why = make_cart(built, args.chgame, log)
+            if cart:
+                written.append("%s (%d KB)" % (os.path.basename(cart),
+                                               (os.path.getsize(cart) + 1023) // 1024))
+            else:
+                written.append("no cart: " + why)
         print(" %ds: %s" % (time.time() - start, ", ".join(written)))
 
     if failed:

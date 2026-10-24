@@ -26,6 +26,13 @@ env:
   # but it is an ordinary board manager index, so arduino-cli installs it here like any other. It
   # brings its own riscv-none-embed-gcc, including an x86_64-linux-gnu build
   CORE_CHGAME: 0.3.0
+  # The CHGame source repository, whose tools/chcart writes the .chgame cart the CHGame
+  # build ships beside its .bin (the board package carries no such tool). Pinned like
+  # everything else here: what a release holds should not change because a repository did.
+  # A commit and not a branch, since that repository publishes no tags: main moving would
+  # otherwise change a rebuilt release. 2026-10-09, "Merge pull request #21 from
+  # joyrider3774/chsd-idle-clocks-before-command"
+  CHGAME_SRC_REF: e1f8d05940ddb7bbef89c13326da75c003f02904
   # the Gamebuino's core uses Arduino's own CMSIS-Atmel tool package for sam.h, which comes with the
   # arduino:samd core: without it the build stops at "sam.h: No such file or directory"
   CORE_ARDUINO_SAMD: 1.8.14
@@ -279,6 +286,13 @@ jobs:
           git clone --depth 1 https://github.com/jmp42/Gamebuino_AKA_lib.git \
             "$HOME/toolchains/Gamebuino_AKA_lib"
 
+      - name: Check out CHGame's tools, for the .chgame cart
+        uses: actions/checkout@v4
+        with:
+          repository: bateske/CHGame
+          ref: ${{ env.CHGAME_SRC_REF }}
+          path: chgame-src
+
       - name: Build every device
         run: |
           # emcc finds its own config and node through this, the browser build needs both
@@ -301,7 +315,7 @@ jobs:
             --aka-lib "$HOME/toolchains/Gamebuino_AKA_lib" \
             --lovyangfx "$HOME/Arduino/libraries/LovyanGFX" \
             --cross-windows \
-            --sdl2-mingw "$HOME/toolchains/SDL2/x86_64-w64-mingw32"
+            --sdl2-mingw "$HOME/toolchains/SDL2/x86_64-w64-mingw32" \n            --chgame "$GITHUB_WORKSPACE/chgame-src"
 
       - name: Upload the release files
         uses: actions/upload-artifact@v4
