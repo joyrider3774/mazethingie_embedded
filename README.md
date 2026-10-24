@@ -77,7 +77,7 @@ Every [release](https://github.com/joyrider3774/mazethingie_embedded/releases) h
 | [Pimoroni Explorer](https://shop.pimoroni.com/products/explorer?variant=42092697845843) | Explorer_Mazethingie.uf2 | hold BOOT while pressing RESET and copy it onto the drive that appears |
 | [Pimoroni Tufty 2350](https://shop.pimoroni.com/products/tufty-2350?variant=55811986227579) | Tufty_Mazethingie.uf2 | hold HOME while pressing RESET and copy it onto the drive that appears |
 | [TinyCircuits Thumby Color](https://tinycircuits.com/products/thumby-color) | ThumbyColor_Mazethingie.uf2 | put it into bootloader mode and copy it onto the RPI-RP2 drive that appears |
-| [CHGame](https://github.com/bateske/CHGame) | CHGame_Mazethingie.bin | flash it over USB with the `chgame-upload` that comes with the board package: `chgame-upload -port COM6 flash CHGame_Mazethingie.bin -run` |
+| [CHGame](https://github.com/bateske/CHGame) | CHGame_Mazethingie.bin (and `CHGame_Mazethingie.chgame`) | flash it over USB with the `chgame-upload` that comes with the board package: `chgame-upload -port COM6 flash CHGame_Mazethingie.bin -run`. A `.chgame` cart of the same build is written beside it, `CHGame_Mazethingie.chgame`: one file holding the program, its cover picture and the game's details, in the format that repository's `spec/chgame.md` sets out. Install it from a clone of [CHGame](https://github.com/bateske/CHGame). **On to the SD card**, which is how the console installs it from its own menu: `python tools/chgame.py cart prepare CHGame_Mazethingie.chgame cardfiles` writes the game as a `.CHG` under `GAMES/` and the menu's own files beside it, and you copy everything in `cardfiles` to the card's root. `cart deploy CHGame_Mazethingie.chgame --card E:\ --no-flash` writes straight to a mounted card instead, without the menu's files. **Over USB**: `cart deploy CHGame_Mazethingie.chgame --port COM6`. The `.bin` above is all you need to do it by hand instead. |
 | [Gamebuino AKA](https://gamebuino.com/) | Aka_Mazethingie.bin | put it on the card the AKA's loader reads |
 | [Playdate](https://play.date/) | Playdate_Mazethingie.pdx.zip | unzip it and sideload Mazethingie.pdx, the same pdx runs in the Playdate simulator |
 | [Libretro / RetroArch](https://www.retroarch.com/) | Libretro_Mazethingie.zip | copy mazethingie_libretro.dll into RetroArch's cores folder and mazethingie_libretro.info into its info folder, then Load Core and Start Core |
@@ -143,6 +143,7 @@ The script looks for everything in the place it is installed in here. A tool som
 | `--n64 DIR` | the mips64-elf toolchain with libdragon | `C:/n64_dev`, `N64_INST` |
 | `--emsdk DIR` | the Emscripten SDK | `C:/github/emsdk`, `EMSDK` |
 | `--dosdev DIR` | DJGPP with CWSDPMI | `C:/dos_dev`, `DOSDEV` |
+| `--chgame DIR` | the CHGame source repository, whose tools write the `.chgame` cart | `C:/github/CHGame`, `CHGAME_DIR` |
 | `--pspdev DIR` | the pspdev toolchain | `C:/psp_dev`, `PSPDEV_DIR` |
 | `--vitasdk DIR` | VitaSDK | `C:/psvita_dev`, `VITASDK` |
 | `--sdl2-mingw DIR` | SDL2's mingw package, its x86_64-w64-mingw32 folder | `SDL2_MINGW` |
