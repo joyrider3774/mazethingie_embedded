@@ -1,10 +1,14 @@
 //Platform.h for the CHGame, Kevin Bates' CH32X035 handheld. Built with its board package
-//(github.com/bateske/CHGame, 0.3.0 or later), using the Arduino core with its SPI library for the
-//display and the board's CHGame library for the buttons and the sound:
-//  display  ST7735S 128x128 on SPI1, chip select PA4, data/command PB0, reset PB12
+//(github.com/bateske/CHGame, 0.4.0 or later), using the Arduino core with its SPI library for the
+//display and the board's CHGame library for the buttons and the sound. One source builds for both
+//boards, Rev0 and Rev1 (Rev 1.5 is a Rev1): the pins come from the board package's variant
+//(PIN_LCD_*, PIN_SD_CS, PIN_LCD_BL), and a build runs only on the board it was built for:
+//  display  ST7735S 128x128 on SPI1, chip select PA4, reset PB12, data/command PB0 (Rev0) or PB4
+//           (Rev1); Rev1's backlight is switched, PB9, lit once the panel is cleared
+//  card     chip select PB11 (Rev0) or PB3 (Rev1)
 //  buttons  one GPIO each, pulled up and low while held, set up and read by the CHGame library
-//  sound    the buzzer on PB10, played by the CHGame library's sound engine, see the sound further
-//           down
+//  sound    the buzzer, PB10 on Rev0 and PA1 on Rev1, played by the CHGame library's sound engine,
+//           see the sound further down
 //  saves    a flash page the bootloader leaves alone, see the saved data further down
 //
 //The display numbers are the ones CHGfx (github.com/bateske/CHGfx) uses for this panel, which is
@@ -365,6 +369,14 @@ void PlatformCHGameDisplay::init(void)
 	setAddrWindow(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 	writeColor(0x0000, (uint32_t)WINDOW_WIDTH * WINDOW_HEIGHT);
 	endWrite();
+
+	//A board with a switched backlight (Rev1 and Rev 1.5: PIN_LCD_BL, PB9, active high and held
+	//off by a pull-down) shows nothing until it is driven high. It is lit once the panel holds the
+	//cleared picture, as CHGfx does it. Rev0's backlight is always on and it has no such pin
+#ifdef PIN_LCD_BL
+	pinMode(PIN_LCD_BL, OUTPUT);
+	digitalWrite(PIN_LCD_BL, HIGH);
+#endif
 }
 
 void PlatformCHGameDisplay::startWrite(void)
@@ -859,8 +871,9 @@ uint8_t Platform_GetButtons(void)
 // The board package builds without the timer module unless the Peripherals menu is set to Full,
 // and the core's tone() is then an empty function: the game would run and say nothing. Leaving
 // that module out is worth about 5 KB, which is the difference between fitting this device and
-// not. The CHGame library plays the buzzer without it: TIM1 channel 2 on PB10, stepped by the
-// core's 1 kHz tick, the way the board's own games sound.
+// not. The CHGame library plays the buzzer without it, stepped by the core's 1 kHz tick, the way
+// the board's own games sound: TIM1 channel 2 on PB10 on Rev0, TIM2 channel 2 on PA1 on Rev1,
+// which the library picks by the board it is built for, so nothing here changes with the board.
 //
 // Every tone is one of the library's effects: steps of a pitch in 20 Hz units and a length of up
 // to 510 ms, so a longer tone is several steps of the same pitch. A tone with no length plays
@@ -989,9 +1002,12 @@ uint32_t Platform_FreeStack(void)
 uint32_t Platform_RandomSeed(void)
 {
 	//the time since power on hardly differs from one start to the next, the noise on an analog
-	//input that nothing drives does
-	return (micros() * micros()) ^ ((uint32_t)analogRead(PIN_A0) * analogRead(PIN_A1)) ^
-	       ((uint32_t)analogRead(PIN_A2) << 16);
+	//input that nothing drives does. Never A1 (PA1): Rev1 plays its buzzer from that pin, and
+	//analogRead() leaves a pin an analog input, which silenced the buzzer for good. A2 and A3 are
+	//free on both boards (CN3's pins on Rev1), A0 is free on Rev0 and Rev1's VBUS sense, which an
+	//analog read never drives
+	return (micros() * micros()) ^ ((uint32_t)analogRead(PIN_A2) * analogRead(PIN_A3)) ^
+	       ((uint32_t)analogRead(PIN_A0) << 16);
 }
 
 void Platform_Log(const char* format, ...)

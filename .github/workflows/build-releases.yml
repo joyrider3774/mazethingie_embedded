@@ -25,14 +25,14 @@ env:
   # Kevin Bates' CH32X035 handheld. Its package is only published for the Arduino IDE 2 on a desktop,
   # but it is an ordinary board manager index, so arduino-cli installs it here like any other. It
   # brings its own riscv-none-embed-gcc, including an x86_64-linux-gnu build
-  CORE_CHGAME: 0.3.0
+  CORE_CHGAME: 0.4.0
   # The CHGame source repository, whose tools/chcart writes the .chgame cart the CHGame
   # build ships beside its .bin (the board package carries no such tool). Pinned like
   # everything else here: what a release holds should not change because a repository did.
-  # A commit and not a branch, since that repository publishes no tags: main moving would
-  # otherwise change a rebuilt release. 2026-10-09, "Merge pull request #21 from
-  # joyrider3774/chsd-idle-clocks-before-command"
-  CHGAME_SRC_REF: e1f8d05940ddb7bbef89c13326da75c003f02904
+  # The tag of the board package release above (CHGame tags its releases since 0.3.0), so
+  # the tools and the core agree: 0.4.0's chcart knows both boards, Rev0 and Rev1, and puts
+  # the game's binary for each in the cart
+  CHGAME_SRC_REF: v0.4.0
   # the Gamebuino's core uses Arduino's own CMSIS-Atmel tool package for sam.h, which comes with the
   # arduino:samd core: without it the build stops at "sam.h: No such file or directory"
   CORE_ARDUINO_SAMD: 1.8.14
@@ -248,7 +248,8 @@ jobs:
           # 0.3.0 links its libraries' objects whole, so CHGfx's DMA interrupt handler keeps its 8 KB
           # framebuffer in the game even though it never draws with it, which leaves the game too
           # little RAM. dot_a_linkage=true links them from archives instead (bateske/CHGame pull
-          # request 20); a package that already has it is left alone
+          # request 20); a package that already has it is left alone, as 0.4.0 is: it ships
+          # with the setting, so this only does something for an older package
           CHLIBS="$HOME/.arduino15/packages/CHGame/hardware/ch32v/${CORE_CHGAME}/libraries"
           for lib in CHGfx CHGame CHSd; do
             props="$CHLIBS/$lib/library.properties"

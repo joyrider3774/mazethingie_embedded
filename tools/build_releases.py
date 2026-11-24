@@ -163,7 +163,8 @@ DEVICES = {
         # a .chgame cart to share it with, see make_cart. Needs CHGame's own tools, which
         # the board package does not carry: without them the rest of the build is unaffected
         "cart": True,
-        # Kevin Bates' CH32X035 handheld, board package github.com/bateske/CHGame (0.3.0 on). It is
+        # Kevin Bates' CH32X035 handheld, board package github.com/bateske/CHGame (0.4.0 on, which
+        # knows both boards: Rev0, and Rev1 and Rev 1.5). It is
         # only published for the Arduino IDE 2, whose packages the IDE 1.8 folder does not hold, so
         # this one is built with the arduino-cli that IDE 2 ships and the rest with the IDE 1.8
         # folder, in the same run. "cli" below is what says so, and --arduino2 says where IDE 2 is
@@ -175,7 +176,13 @@ DEVICES = {
         #an empty function. The buzzer is played by the board's CHGame library instead (see
         #PlatformCHGame.cpp), so nothing is lost by it. Naming it here means a later change of default cannot quietly
         #turn the sound off, or quietly cost the 5 KB
-        "fqbn": "CHGame:ch32v:rev0:opt=osstd,periph=game",
+        "fqbn": "CHGame:ch32v:{board}:opt=osstd,periph=game",
+        #Built once for each board, oldest first: a program built for one does not run on the
+        #other (the buttons, the screen's data/command line, the card's chip select, the buzzer
+        #and the LED moved, and Rev1 switches its backlight). Each gives its own
+        #CHGame_<game>_<board>.bin, and the .chgame cart carries all of them, a binary per board,
+        #as CHGame's spec/chgame.md has it. {board} in the fqbn above is the one being built
+        "boards": ["rev0", "rev1"],
         #The Optimize menu is pinned as well, to "Smallest (-Os)", for the same reason the
         #Peripherals menu is: a later change of default cannot quietly change what is built.
         #Its oslto setting adds -flto, which is worth about 2.5 KB of the 50944 this device has,
@@ -458,7 +465,7 @@ def arduino2_cli(arduino2):
     return path if os.path.isfile(path) else None
 
 
-def build_arduino_cli(device, defines, build_dir, cache_dir, arduino_cli, log):
+def build_arduino_cli(device, defines, build_dir, cache_dir, arduino_cli, log, board="rev0"):
     """Builds the sketch with arduino-cli, which is what the build uses where there is no Arduino IDE
     1.8 folder (the CI runners). Returns the path of the build's files without extension"""
     flags = extra_flags(device, defines)
@@ -467,7 +474,7 @@ def build_arduino_cli(device, defines, build_dir, cache_dir, arduino_cli, log):
         return None
     command = [
         arduino_cli, "compile",
-        "--fqbn", DEVICES[device]["fqbn"],
+        "--fqbn", DEVICES[device]["fqbn"].replace("{board}", board),
         "--build-path", build_dir,
         "--build-cache-path", cache_dir,
         # empty in every one of the board packages, so the defines are all they hold
@@ -540,7 +547,7 @@ def cmake_define_args(defines):
     return args
 
 
-def make_cart(built, chgame_dir, log):
+def make_cart(built, chgame_dir, log, arduino_cli=None):
     """The .chgame distribution cart of the CHGame build, by CHGame's own chcart.
 
     A .chgame (CHGame's spec/chgame.md) is how a game is shared: a ZIP holding the
@@ -573,9 +580,18 @@ def make_cart(built, chgame_dir, log):
         #chcart takes a game from a sketch folder: its chgame.json, the built image
         #under build/release, and the card files under sdcard/
         stage = os.path.join(tmp, GAME)
-        os.makedirs(os.path.join(stage, "build", "release"))
+        os.makedirs(stage)
         shutil.copyfile(meta, os.path.join(stage, "chgame.json"))
-        shutil.copyfile(built + ".bin", os.path.join(stage, "build", "release", GAME + ".ino.bin"))
+        #one build per board (a dict board -> build), where chcart looks for each, the way
+        #CHGame's own tools lay a sketch's builds out: build/<board>/release (0.4.0 on). A
+        #single build is the layout of the tools before that
+        if isinstance(built, dict):
+            for board, one in built.items():
+                os.makedirs(os.path.join(stage, "build", board, "release"))
+                shutil.copyfile(one + ".bin", os.path.join(stage, "build", board, "release", GAME + ".ino.bin"))
+        else:
+            os.makedirs(os.path.join(stage, "build", "release"))
+            shutil.copyfile(built + ".bin", os.path.join(stage, "build", "release", GAME + ".ino.bin"))
         #the game reads its art and levels off the card, so a cart without the card file
         #would install a game that cannot start
         cards = glob.glob(os.path.join(RELEASES, "*.DAT"))
@@ -587,6 +603,9 @@ def make_cart(built, chgame_dir, log):
             if os.path.isfile(os.path.join(ROOT, extra)):
                 shutil.copyfile(os.path.join(ROOT, extra), os.path.join(stage, extra))
 
+        env = dict(os.environ)
+        if arduino_cli:
+            env["PATH"] = os.path.dirname(arduino_cli) + os.pathsep + env.get("PATH", "")
         steps = [["cart", "new", out, stage, "--no-build"]]
         if os.path.isfile(art):
             steps.append(["cart", "picture", out, art, "--game", game_id])
@@ -596,7 +615,7 @@ def make_cart(built, chgame_dir, log):
             for step in steps:
                 f.write("\n$ chgame %s\n" % " ".join(step))
                 f.flush()
-                if subprocess.run([sys.executable, tool] + step,
+                if subprocess.run([sys.executable, tool] + step, env=env,
                                   stdout=f, stderr=subprocess.STDOUT).returncode != 0:
                     return None, "chgame %s failed, see %s" % (step[1], os.path.basename(log))
     return out, None
@@ -1194,7 +1213,23 @@ def main():
                     print("    %s needs the one the Arduino IDE 2 ships, see --arduino2" % device)
                     failed.append(tag)
                     continue
-            if cli:
+            if cli and DEVICES[device].get("boards"):
+                #once per board, each in a folder and with a log of its own; built is the
+                #newest board's, boards_built every board's, for the outputs and the cart
+                boards_built = {}
+                for board in DEVICES[device]["boards"]:
+                    board_dir = os.path.join(build_dir, board)
+                    os.makedirs(board_dir, exist_ok=True)
+                    board_cache = cache_dir + "_" + board
+                    os.makedirs(board_cache, exist_ok=True)
+                    board_log = os.path.join(WORK, "%s_%s.log" % (tag, board))
+                    boards_built[board] = build_arduino_cli(device, defines, board_dir, board_cache,
+                                                            cli, board_log, board)
+                    if not boards_built[board]:
+                        log = board_log
+                        break
+                built = boards_built[board] if all(boards_built.values()) else None
+            elif cli:
                 built = build_arduino_cli(device, defines, build_dir, cache_dir, cli, log)
             else:
                 built = build_arduino(device, defines, build_dir, cache_dir, args.arduino, log)
@@ -1206,9 +1241,14 @@ def main():
             continue
 
         written = []
-        for output in DEVICES[device]["outputs"]:
+        #a device built for several boards gives each board's files, CHGame_<game>_rev0.bin ...
+        per_board = [(board, boards_built[board], "%s_%s" % (variant, board))
+                     for board in DEVICES[device].get("boards", [])] or [(None, built, variant)]
+        for output, (board, built_one, name_variant) in [(o, b) for b in per_board
+                                                          for o in DEVICES[device]["outputs"]]:
+            built = built_one
             ext = output.split()[0]
-            target = os.path.join(RELEASES, file_name(device, variant, ext))
+            target = os.path.join(RELEASES, file_name(device, name_variant, ext))
             if output == "zip from bin":
                 also = [built + e for e in DEVICES[device].get("also", ())]
                 package_with_data(built + ".bin", DEVICES[device]["folder"],
@@ -1222,10 +1262,22 @@ def main():
                 shutil.copyfile(built + "." + ext, target)
             written.append("%s (%d KB)" % (os.path.basename(target), (os.path.getsize(target) + 1023) // 1024))
 
+        #The newest board's build under the plain name too, CHGame_<game>.bin: the default
+        #download is for the current board (Rev1 and Rev 1.5); an older board's keeps its own
+        #name beside it (CHGame_<game>_rev0.bin), and the cart carries every board's
+        if DEVICES[device].get("boards"):
+            newest = DEVICES[device]["boards"][-1]
+            for output in DEVICES[device]["outputs"]:
+                ext = output.split()[0]
+                target = os.path.join(RELEASES, file_name(device, variant, ext))
+                shutil.copyfile(os.path.join(RELEASES, file_name(device, "%s_%s" % (variant, newest), ext)), target)
+                written.append("%s (%s, the default)" % (os.path.basename(target), newest))
+
         #the shareable cart, for a device that has one. It is the only output allowed to
         #go missing, see make_cart
         if DEVICES[device].get("cart"):
-            cart, why = make_cart(built, args.chgame, log)
+            cart, why = make_cart(boards_built if DEVICES[device].get("boards") else built,
+                                  args.chgame, log, cli if DEVICES[device].get("cli") else None)
             if cart:
                 written.append("%s (%d KB)" % (os.path.basename(cart),
                                                (os.path.getsize(cart) + 1023) // 1024))
